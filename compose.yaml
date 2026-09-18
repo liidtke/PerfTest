@@ -1,0 +1,225 @@
+name: perf-test
+
+x-database-resources: &database-resources
+  cpus: 16
+  mem_limit: 32g
+  memswap_limit: 32g
+  shm_size: 2g
+  stop_grace_period: 1m
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - perf-test
+
+services:
+  app:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    stdin_open: true
+    tty: true
+    environment:
+      TERM: xterm-256color
+      ConnectionStrings__MariaDb: Server=mariadb;Port=3306;Database=perf_test;User=perf_test;Password=perf_test
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=perf_test;Username=perf_test;Password=perf_test
+      ConnectionStrings__MongoDb: mongodb://perf_test:perf_test@mongodb:27017/perf_test?authSource=admin
+      ConnectionStrings__Cassandra: cassandra:9042
+      ConnectionStrings__ScyllaDb: scylladb:9042
+    volumes:
+      - ./data:/app/data:Z
+    networks:
+      - perf-test
+
+  mariadb:
+    <<: *database-resources
+    profiles: [mariadb]
+    image: docker.io/library/mariadb:11.8
+    command:
+      - --innodb-buffer-pool-size=20G
+      - --innodb-log-file-size=2G
+      - --innodb-flush-method=O_DIRECT
+      - --innodb-io-capacity=2000
+      - --innodb-io-capacity-max=4000
+      - --max-connections=1000
+      - --table-open-cache=4000
+      - --skip-name-resolve
+      - --performance-schema=OFF
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: perf_test
+      MARIADB_USER: perf_test
+      MARIADB_PASSWORD: perf_test
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  postgres:
+    <<: *database-resources
+    profiles: [postgres]
+    image: docker.io/library/postgres:18.6
+    command:
+      - postgres
+      - -c
+      - shared_buffers=8GB
+      - -c
+      - effective_cache_size=24GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=2GB
+      - -c
+      - autovacuum_work_mem=512MB
+      - -c
+      - autovacuum_max_workers=4
+      - -c
+      - autovacuum_naptime=10s
+      - -c
+      - autovacuum_analyze_scale_factor=0.05
+      - -c
+      - autovacuum_vacuum_insert_scale_factor=0.1
+      - -c
+      - max_connections=400
+      - -c
+      - max_wal_size=8GB
+      - -c
+      - min_wal_size=1GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_buffers=64MB
+      - -c
+      - wal_compression=lz4
+      - -c
+      - wal_writer_delay=10ms
+      - -c
+      - random_page_cost=1.0
+      - -c
+      - seq_page_cost=1.0
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - maintenance_io_concurrency=200
+      - -c
+      - huge_pages=off
+      - -c
+      - jit=off
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - ssl=off
+      - -c
+      - default_toast_compression=lz4
+      - -c
+      - bgwriter_delay=10ms
+      - -c
+      - bgwriter_lru_maxpages=1000
+    environment:
+      POSTGRES_DB: perf_test
+      POSTGRES_USER: perf_test
+      POSTGRES_PASSWORD: perf_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres18-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perf_test -d perf_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  mongodb:
+    <<: *database-resources
+    profiles: [mongodb]
+    image: docker.io/library/mongo:8.0
+    command:
+      - --wiredTigerCacheSizeGB
+      - "15"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: perf_test
+      MONGO_INITDB_ROOT_PASSWORD: perf_test
+      MONGO_INITDB_DATABASE: perf_test
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username perf_test --password perf_test --authenticationDatabase admin --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  cassandra:
+    <<: *database-resources
+    profiles: [cassandra]
+    image: docker.io/library/cassandra:5.0
+    environment:
+      CASSANDRA_CLUSTER_NAME: PerfTestCassandra
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: 12G
+      HEAP_NEWSIZE: 2G
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'SELECT now() FROM system.local'"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+
+  scylladb:
+    <<: *database-resources
+    profiles: [scylladb]
+    image: docker.io/scylladb/scylla:2025.1
+    cap_add:
+      - SYS_NICE
+    command:
+      - --smp=8
+      - --memory=20G
+      - --overprovisioned=1
+      - --io-setup=0
+      - --io-properties-file=/etc/scylla.d/io_properties.yaml
+      - --default-log-level=warn
+    ports:
+      - "9043:9042"
+    volumes:
+      - scylladb-data:/var/lib/scylla
+      - ./scylla-io-properties.yaml:/etc/scylla.d/io_properties.yaml:ro,Z
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'SELECT now() FROM system.local'"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+
+networks:
+  perf-test:
+    driver: bridge
+
+volumes:
+  mariadb-data:
+  postgres18-data:
+  mongodb-data:
+  cassandra-data:
+  scylladb-data:
