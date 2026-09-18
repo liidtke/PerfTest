@@ -7,7 +7,7 @@ public sealed class SqliteDatasetGenerator
 {
     public const int FixedCpfCount = 1_000;
     public const int PersonCount = 1_000_000;
-    public const int LimitCount = 5_000_000;
+    public const int LimitCount = 20_000_000;
     private const int Seed = 20_260_917;
 
     public Task GenerateAsync(
@@ -72,7 +72,7 @@ public sealed class SqliteDatasetGenerator
             InsertLimits(connection, progress, cancellationToken);
 
             progress?.Report("Creating SQLite indexes...");
-            Execute(connection, """
+            Execute(connection, $"""
                 CREATE INDEX ix_limits_person_occurred
                     ON limits (person_id, occurred);
                 CREATE INDEX ix_limits_origin_service
@@ -80,9 +80,9 @@ public sealed class SqliteDatasetGenerator
 
                 INSERT INTO dataset_metadata (key, value) VALUES
                     ('seed', '20260917'),
-                    ('fixed_cpf_count', '1000'),
-                    ('person_count', '1000000'),
-                    ('limit_count', '5000000');
+                    ('fixed_cpf_count', '{FixedCpfCount}'),
+                    ('person_count', '{PersonCount}'),
+                    ('limit_count', '{LimitCount}');
                 PRAGMA optimize;
                 """);
             connection.Close();
@@ -182,7 +182,7 @@ public sealed class SqliteDatasetGenerator
         for (var ordinal = 0; ordinal < LimitCount; ordinal++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var personOrdinal = ordinal / 5 + 1;
+            var personOrdinal = ordinal / (LimitCount / PersonCount) + 1;
 
             id.Value = $"limit-{ordinal + 1:D8}";
             personId.Value = $"person-{personOrdinal:D7}";

@@ -57,7 +57,74 @@ internal static class ComposeDatabaseRuntime
             throw;
         }
 
+        await WarmupServiceAsync(service, cancellationToken);
         return new Session(composeFile, service);
+    }
+
+    private static async Task WarmupServiceAsync(
+        string service,
+        CancellationToken cancellationToken)
+    {
+        if (service != "postgres")
+            return;
+
+        Console.WriteLine("Warming PostgreSQL shared buffers...");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "podman",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add($"perf-test-{service}-1");
+        startInfo.ArgumentList.Add("psql");
+        startInfo.ArgumentList.Add("-U");
+        startInfo.ArgumentList.Add("perf_test");
+        startInfo.ArgumentList.Add("-d");
+        startInfo.ArgumentList.Add("perf_test");
+        startInfo.ArgumentList.Add("-v");
+        startInfo.ArgumentList.Add("ON_ERROR_STOP=1");
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add(
+            """
+            CREATE EXTENSION IF NOT EXISTS pg_prewarm;
+            SELECT pg_prewarm(c.oid)
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relkind IN ('r', 'i');
+            """);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start podman exec.");
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // The process may have already exited.
+            }
+
+            throw;
+        }
+
+        var error = await errorTask;
+        await outputTask;
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"PostgreSQL shared buffer warmup failed with exit code {process.ExitCode}. {error.Trim()}");
+        }
     }
 
     private static string FindComposeFile()

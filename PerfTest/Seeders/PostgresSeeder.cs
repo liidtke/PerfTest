@@ -37,6 +37,12 @@ public sealed class PostgresSeeder(string connectionString)
         """;
 
     protected override string PostSeedSql => """
+        CREATE EXTENSION IF NOT EXISTS pg_prewarm;
+        SELECT pg_prewarm(c.oid)
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'i');
         ANALYZE persons;
         ANALYZE limits;
         """;

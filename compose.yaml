@@ -73,6 +73,10 @@ services:
       - -c
       - shared_buffers=8GB
       - -c
+      - shared_preload_libraries=pg_prewarm
+      - -c
+      - pg_prewarm.autoprewarm=on
+      - -c
       - effective_cache_size=24GB
       - -c
       - work_mem=16MB
